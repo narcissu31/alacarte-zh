@@ -54,8 +54,10 @@ services:
       # 加密 Apple 凭据用；留空会自动生成并写入 data/web/.secret
       - AMDL_SECRET_KEY=
       - AUTH_DISABLED=false
-      # 前面有 nginx 反代，需要信任转发头
-      - TRUST_PROXY=true
+      # 前面有 nginx 反代，信任私网来源（10/172.16/192.168）以便取到真实客户端 IP
+      # 注意：不要写 true —— express 的 trust proxy 只接受布尔/数字/命名子网/IP，
+      # 字符串 "true" 会在启动时抛异常导致容器起不来
+      - TRUST_PROXY=uniquelocal
     volumes:
       - ./data/web:/config
       - ./music:/music
