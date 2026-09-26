@@ -1,0 +1,85 @@
+# ALACarte 简体中文语言包 —— 部署编排
+#
+# 设计要点：**完全不改动上游源码**，汉化由一个 nginx 反向代理在 HTML 响应里注入 zh.js。
+#   → 上游更新只需重新拉源码构建；翻译与上游解耦，永久保留，改翻译也不用重建。
+#
+# 目录约定（由 scripts/fetch-upstream.sh 准备）：
+#   ./upstream  上游 ALACarte 源码（已按国内网络打好加速器补丁）
+#   ./data      应用设置与登录凭据（务必备份）
+#   ./music     音乐库输出目录
+#
+# 首次启动取初始化令牌：
+#   docker logs alacarte-web 2>&1 | grep -i "setup token"
+
+services:
+  wrapper:
+    build:
+      context: ./upstream/wrapper
+      dockerfile: Dockerfile
+    image: alacarte-wrapper:local
+    container_name: alacarte-wrapper
+    platform: linux/amd64
+    volumes:
+      - ./data/wrapper:/app/rootfs/data
+      # Android 解密运行时需要可用的设备节点
+      - /dev/null:/app/rootfs/dev/null
+      - /dev/urandom:/app/rootfs/dev/urandom
+      - /dev/random:/app/rootfs/dev/random
+      - /dev/zero:/app/rootfs/dev/zero
+    entrypoint: ["/app/wrapper-entrypoint.sh"]
+    command: ["-H", "0.0.0.0"]
+    environment:
+      - LD_PRELOAD=/app/libwrapper_login_fix.so
+    expose: ["10020", "20020", "30020", "40020"]
+    networks: [alacarte-net]
+    restart: on-failure
+
+  web:
+    build:
+      context: ./upstream
+      dockerfile: backend/Dockerfile
+    image: alacarte-web:local
+    container_name: alacarte-web
+    platform: linux/amd64
+    depends_on: [wrapper]
+    environment:
+      - PORT=7373
+      - AMDL_WRAPPER_HOST=alacarte-wrapper
+      - AMDL_WRAPPER_DECRYPT_PORT=10020
+      - AMDL_WRAPPER_M3U8_PORT=20020
+      - AMDL_WRAPPER_ACCOUNT_PORT=30020
+      - AMDL_WRAPPER_SUPERVISOR_PORT=40020
+      - AMDL_MUSIC_PATH=/music
+      - AMDL_CONFIG_DIR=/config
+      # 加密 Apple 凭据用；留空会自动生成并写入 data/web/.secret
+      - AMDL_SECRET_KEY=
+      - AUTH_DISABLED=false
+      # 前面有 nginx 反代，需要信任转发头
+      - TRUST_PROXY=true
+    volumes:
+      - ./data/web:/config
+      - ./music:/music
+      - ./staging:/tmp/alacarte-staging
+    # 不再直接对外暴露端口，统一走 zh 层入口
+    expose: ["7373"]
+    networks: [alacarte-net]
+    restart: unless-stopped
+
+  # 中文注入层：对外唯一入口
+  zh:
+    # 国内直连 registry-1.docker.io 不通，故走加速器前缀；能直连的话可改回 nginx:alpine
+    image: docker.m.daocloud.io/library/nginx:alpine
+    container_name: alacarte-zh
+    depends_on: [web]
+    ports:
+      - "8280:80"        # ← 访问地址 http://<你的IP>:8280
+    volumes:
+      - ./nginx/zh-inject.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./zh.js:/usr/share/nginx/zh/zh.js:ro
+    networks: [alacarte-net]
+    restart: unless-stopped
+
+networks:
+  alacarte-net:
+    name: alacarte-net
+    external: false

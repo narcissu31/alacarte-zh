@@ -1,0 +1,8 @@
+# 本地数据与上游源码，不入库
+upstream/
+data/
+music/
+staging/
+node_modules/
+*.log
+.DS_Store
